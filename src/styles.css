@@ -1,0 +1,178 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design system — کتابخانه قوانین مالیاتی
+ * Parchment surfaces, deep ink text, teal/gold accents. RTL-first, Vazirmatn.
+ */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --font-sans: "Vazirmatn", ui-sans-serif, system-ui, sans-serif;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-gold: var(--gold);
+  --color-gold-foreground: var(--gold-foreground);
+  --shadow-panel: var(--shadow-panel);
+  --background-image-gradient-header: var(--gradient-header);
+}
+
+:root {
+  --radius: 0.75rem;
+  --background: oklch(0.975 0.012 95);
+  --foreground: oklch(0.24 0.03 200);
+  --card: oklch(0.995 0.006 95);
+  --card-foreground: oklch(0.24 0.03 200);
+  --popover: oklch(0.995 0.006 95);
+  --popover-foreground: oklch(0.24 0.03 200);
+  --primary: oklch(0.42 0.075 195);
+  --primary-foreground: oklch(0.985 0.01 95);
+  --secondary: oklch(0.93 0.02 95);
+  --secondary-foreground: oklch(0.3 0.04 200);
+  --muted: oklch(0.94 0.014 95);
+  --muted-foreground: oklch(0.5 0.02 200);
+  --accent: oklch(0.9 0.05 85);
+  --accent-foreground: oklch(0.3 0.05 60);
+  --destructive: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(0.985 0.01 95);
+  --border: oklch(0.88 0.02 95);
+  --input: oklch(0.88 0.02 95);
+  --ring: oklch(0.42 0.075 195);
+  --gold: oklch(0.72 0.12 78);
+  --gold-foreground: oklch(0.25 0.05 60);
+  --shadow-panel: 0 1px 2px oklch(0.24 0.03 200 / 6%), 0 12px 32px -18px oklch(0.24 0.03 200 / 25%);
+  --gradient-header: linear-gradient(135deg, oklch(0.34 0.06 200) 0%, oklch(0.45 0.08 195) 55%, oklch(0.52 0.09 180) 100%);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    line-height: 1.9;
+  }
+
+  ::selection {
+    background-color: var(--gold);
+    color: var(--gold-foreground);
+  }
+}
+
+@utility panel {
+  background-color: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-panel);
+}
+
+@utility law-text {
+  white-space: pre-wrap;
+  text-align: justify;
+  line-height: 2.15;
+  font-size: 0.975rem;
+}
+
+/* ---------- چاپ / خروجی PDF ---------- */
+@media print {
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #111 !important;
+    font-size: 11.5pt;
+    line-height: 1.9;
+  }
+
+  .print-header {
+    background: none !important;
+    background-image: none !important;
+    color: #111 !important;
+    border-bottom: 1.5pt solid #111;
+    padding: 0 0 8pt !important;
+  }
+
+  .print-header * {
+    color: #111 !important;
+    opacity: 1 !important;
+  }
+
+  main,
+  .print-header > div {
+    max-width: none !important;
+    padding-inline: 0 !important;
+    padding-block: 8pt !important;
+    margin: 0 !important;
+  }
+
+  .panel {
+    border: 0.6pt solid #999 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    padding: 8pt !important;
+    margin-bottom: 8pt;
+  }
+
+  article,
+  tr,
+  h2,
+  h3 {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse;
+  }
+
+  th,
+  td {
+    border: 0.4pt solid #aaa !important;
+    padding: 3pt 4pt !important;
+    font-size: 9.5pt;
+  }
+
+  a {
+    color: #111 !important;
+    text-decoration: none !important;
+  }
+
+  @page {
+    size: A4;
+    margin: 14mm 12mm;
+  }
+}

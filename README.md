@@ -87,7 +87,8 @@ bun run dev        # http://localhost:8080
 │   │   └── ui/            # کتابخانه کامپوننت‌های پایه (shadcn/ui)
 │   ├── lib/
 │   │   ├── library.functions.ts  # توابع سرور: خواندن کتاب‌ها، مواد، جست‌وجو
-│   │   ├── hy-scrape.server.ts   # برداشت داده از منبع بیرونی (فقط سرور)
+│   │   ├── gdrive-source.server.ts  # منبع داده: مخزن Google Drive سازمان (فقط سرور)
+│   │   ├── official-sources.server.ts  # منابع رسمی دولتی — فقط با اجازه‌ی مالک (فقط سرور)
 │   │   └── utils.ts              # ابزارهای کمکی
 │   ├── integrations/supabase/    # کلاینت‌ها و تایپ‌های پایگاه داده
 │   ├── hooks/             # هوک‌های React

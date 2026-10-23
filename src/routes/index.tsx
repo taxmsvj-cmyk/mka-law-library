@@ -50,7 +50,9 @@ function LibraryPage() {
   const sync = useMutation({
     mutationFn: async () => {
       const result = await syncFn({});
-      addLog(`فهرست قوانین بروزرسانی شد: ${result.saved} قانون مالیاتی از ${result.found} مورد`);
+      addLog(
+        `مخزن Drive همگام‌سازی شد: ${result.indexed} سند ایندکس، ${result.books} قانون و ${result.articles} سند وابسته`,
+      );
       await booksRefetch();
     },
   });
@@ -93,8 +95,10 @@ function LibraryPage() {
             کتابخانه قوانین و بخشنامه‌های مالیاتی
           </h1>
           <p className="mt-4 max-w-2xl text-sm leading-8 opacity-90">
-            قوانین، مواد قانونی و بخشنامه‌های مالیاتی از منبع همراه‌یار استخراج و در این کتابخانه
-            ذخیره می‌شود؛ با جستجوی متن کامل در تمام مواد.
+            قوانین، مواد قانونی و بخشنامه‌های مالیاتی از مخزن اختصاصی Google Drive سازمان بارگذاری
+            و در این کتابخانه ذخیره می‌شود؛ در صورت نبود سند یا تأییدیه، ارجاع به منابع رسمی
+            (سازمان امور مالیاتی، قوانین مجلس و روزنامه رسمی) فقط با اجازه‌ی مالک پروژه انجام
+            می‌شود. با جستجوی متن کامل در تمام مواد.
           </p>
           <div className="mt-8 flex flex-wrap items-end gap-6 text-sm">
             <div>
@@ -174,10 +178,11 @@ function LibraryPage() {
         </div>
 
         <section className="panel no-print mt-8 p-5">
-          <h2 className="text-lg font-semibold">استخراج و بروزرسانی</h2>
+          <h2 className="text-lg font-semibold">همگام‌سازی مخزن اسناد</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            ابتدا فهرست قوانین مالیاتی را دریافت کنید، سپس متن کامل مواد و بخشنامه‌های هر قانون را
-            ذخیره کنید. عملیات به صورت دسته‌ای انجام می‌شود و می‌توانید آن را ادامه دهید.
+            ابتدا فهرست قوانین را از مخزن Google Drive همگام‌سازی کنید، سپس متن اسناد هر قانون را
+            ذخیره کنید. عملیات به صورت دسته‌ای انجام می‌شود و می‌توانید آن را ادامه دهید. منابع
+            رسمی دولتی فقط با اجازه‌ی مالک پروژه فعال می‌شوند.
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
             <button
@@ -185,7 +190,7 @@ function LibraryPage() {
               disabled={busy}
               className="h-10 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground disabled:opacity-50"
             >
-              {sync.isPending ? "در حال دریافت فهرست…" : "۱) دریافت فهرست قوانین"}
+              {sync.isPending ? "در حال همگام‌سازی مخزن…" : "۱) همگام‌سازی مخزن Drive"}
             </button>
             <button
               onClick={() => scrapeAll.mutate()}

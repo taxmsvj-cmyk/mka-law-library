@@ -1,0 +1,1282 @@
+diff --git a/apps/mka-core/.env.example b/apps/mka-core/.env.example
+new file mode 100644
+index 0000000..f7571c9
+--- /dev/null
++++ b/apps/mka-core/.env.example
+@@ -0,0 +1,29 @@
++# نمونه متغیرهای محیطی — این فایل را کپی کنید به `.env` و مقادیر واقعی را بگذارید.
++# فایل `.env` هرگز نباید در مخزن ذخیره شود (در .gitignore قرار دارد).
++
++# --- سمت سرور (فقط در سرور خوانده می‌شود) ---
++SUPABASE_URL=https://<project-ref>.supabase.co
++SUPABASE_PUBLISHABLE_KEY=<publishable-key>
++SUPABASE_PROJECT_ID=<project-ref>
++
++# --- سمت مرورگر (در باندل فرانت‌اند قرار می‌گیرد؛ فقط کلید عمومی) ---
++VITE_SUPABASE_URL=https://<project-ref>.supabase.co
++VITE_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
++VITE_SUPABASE_PROJECT_ID=<project-ref>
++
++# --- اختیاری: فقط برای کارهای مدیریتی سمت سرور ---
++# این کلید RLS را دور می‌زند؛ هرگز آن را در کد سمت مرورگر استفاده نکنید.
++# SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
++
++# --- مخزن اسناد Google Drive (منبع اصلی داده‌ی کتابخانه) ---
++# ریشه‌ی مخزن؛ اگر خالی باشد شناسه‌ی پوشه‌ی رسمی سازمان استفاده می‌شود.
++# GDRIVE_ROOT_FOLDER_ID=1Jx0cipUqQyGnJk4hFCURzWIg1Abo1Del
++# اختیاری ولی توصیه‌شده: کلید API گوگل با دسترسی Google Drive API
++# (Google Cloud Console → APIs & Services → Credentials → API key؛
++#  محدود به Google Drive API). بدون این کلید از نمای عمومی پوشه استفاده می‌شود.
++# GOOGLE_DRIVE_API_KEY=<google-api-key>
++
++# --- سیاست منابع رسمی (پیش‌فرض: بسته) ---
++# به هیچ عنوان پیش از مشورت با مالک پروژه و دریافت اجازه‌ی کتبی true نکنید.
++# فقط با اجازه‌ی مالک: واکشی خودکار از tax.gov.ir و rc.majlis.ir و ... فعال می‌شود.
++# OFFICIAL_FALLBACK_APPROVED=false
+diff --git a/apps/mka-core/package.json b/apps/mka-core/package.json
+index d67e26b..7eaf35c 100644
+--- a/apps/mka-core/package.json
++++ b/apps/mka-core/package.json
+@@ -67,6 +67,7 @@
+     "tailwindcss": "^4.2.1",
+     "tw-animate-css": "^1.3.4",
+     "vaul": "^1.1.2",
++    "unpdf": "^1.9.1",
+     "vite-tsconfig-paths": "^6.0.2",
+     "zod": "^3.25.76"
+   },
+diff --git a/apps/mka-core/src/integrations/supabase/types.ts b/apps/mka-core/src/integrations/supabase/types.ts
+index 4d5a052..13f7a66 100644
+--- a/apps/mka-core/src/integrations/supabase/types.ts
++++ b/apps/mka-core/src/integrations/supabase/types.ts
+@@ -169,6 +169,55 @@ export type Database = {
+         }
+         Relationships: []
+       }
++
++      drive_documents: {
++        Row: {
++          content: string | null
++          created_at: string
++          drive_url: string
++          extraction_status: string
++          folder_path: string | null
++          id: string
++          mime_type: string | null
++          modified_time: string | null
++          name: string
++          root_id: string | null
++          root_name: string | null
++          size: number | null
++          synced_at: string | null
++        }
++        Insert: {
++          content?: string | null
++          created_at?: string
++          drive_url?: string
++          extraction_status?: string
++          folder_path?: string | null
++          id: string
++          mime_type?: string | null
++          modified_time?: string | null
++          name: string
++          root_id?: string | null
++          root_name?: string | null
++          size?: number | null
++          synced_at?: string | null
++        }
++        Update: {
++          content?: string | null
++          created_at?: string
++          drive_url?: string
++          extraction_status?: string
++          folder_path?: string | null
++          id?: string
++          mime_type?: string | null
++          modified_time?: string | null
++          name?: string
++          root_id?: string | null
++          root_name?: string | null
++          size?: number | null
++          synced_at?: string | null
++        }
++        Relationships: []
++      }
+     }
+     Views: {
+       [_ in never]: never
+diff --git a/apps/mka-core/src/lib/gdrive-source.server.ts b/apps/mka-core/src/lib/gdrive-source.server.ts
+new file mode 100644
+index 0000000..c40400a
+--- /dev/null
++++ b/apps/mka-core/src/lib/gdrive-source.server.ts
+@@ -0,0 +1,474 @@
++/**
++ * Server-only Google Drive source — مخزن اختصاصی اسناد مالیاتی مالک پروژه.
++ *
++ * این ماژول جایگزین کامل اسکرپر hamrahyaar.com شده است (ریسک حقوقی وابستگی به
++ * سایت شخصی ثالث + شکنندگی regex). منبع داده‌ی کتابخانه اکنون پوشه‌ی Google
++ * Drive خودِ سازمان است و هیچ درخواستی به سایت‌های ثالث زده نمی‌شود.
++ *
++ * دو حالت اتصال پشتیبانی می‌شود:
++ *  ۱) حالت API (توصیه‌شده): کلید API گوگل با دسترسی Drive API در متغیر
++ *     GOOGLE_DRIVE_API_KEY — پایدار، سریع و با متادیتای کامل.
++ *  ۲) حالت عمومی (بدون کلید): خواندن نمای تعبیه‌شده‌ی پوشه‌های عمومی
++ *     (embeddedfolderview) — بدون هیچ پیکربندی، فقط برای پوشه‌های عمومی.
++ *
++ * هیچ فایل .env و هیچ کلید محرمانه‌ای در این ماژول استفاده نمی‌شود.
++ */
++
++const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
++const EMBEDDED_VIEW_BASE = "https://drive.google.com/embeddedfolderview";
++const DRIVE_HOST = "https://drive.google.com";
++
++/** ریشه‌ی مخزن اسناد — قابل بازنویسی با متغیر محیطی GDRIVE_ROOT_FOLDER_ID. */
++export const DRIVE_ROOT_FOLDER =
++  process.env["GDRIVE_ROOT_FOLDER_ID"] ?? "1Jx0cipUqQyGnJk4hFCURzWIg1Abo1Del";
++
++/** پیشوند شناسه‌های مجازی در جداول books/articles/circulars. */
++export const DRIVE_PREFIX = "drive:";
++
++export type DriveNode = {
++  id: string;
++  name: string;
++  mimeType: string;
++  isFolder: boolean;
++  size: number | null;
++  modifiedTime: string | null;
++  /** مسیر پوشه‌ها از ریشه، مثلا «1 - قانون مالیات‌های مستقیم / باب اول». */
++  folderPath: string;
++  /** شناسه‌ی گره سطح‌بالای ریشه که این سند به آن می‌رسد (برای نگاشت کتاب/ماده). */
++  rootId: string;
++  rootName: string;
++  depth: number;
++};
++
++export type DriveListMode = "api" | "public-view";
++
++export function driveApiKey(): string | null {
++  const key = process.env["GOOGLE_DRIVE_API_KEY"];
++  return key && key.trim().length > 10 ? key.trim() : null;
++}
++
++export function driveMode(): DriveListMode {
++  return driveApiKey() ? "api" : "public-view";
++}
++
++/* ------------------------------------------------------------------ */
++/* ابزارهای HTML (خودکفا — بدون وابستگی به ماژول اسکرپر قدیمی)         */
++/* ------------------------------------------------------------------ */
++
++const ENTITIES: Record<string, string> = {
++  amp: "&",
++  lt: "<",
++  gt: ">",
++  quot: '"',
++  apos: "'",
++  nbsp: " ",
++  laquo: "«",
++  raquo: "»",
++  zwnj: "\u200c",
++};
++
++function decodeEntities(input: string): string {
++  return input
++    .replace(/&#(\d+);/g, (_m, code: string) => String.fromCodePoint(Number(code)))
++    .replace(/&#x([0-9a-fA-F]+);/g, (_m, code: string) => String.fromCodePoint(parseInt(code, 16)))
++    .replace(/&([a-zA-Z]+);/g, (m, name: string) => ENTITIES[name] ?? m);
++}
++
++export function toPlainText(html: string): string {
++  return decodeEntities(
++    html
++      .replace(/<script[\s\S]*?<\/script>/gi, "")
++      .replace(/<style[\s\S]*?<\/style>/gi, "")
++      .replace(/<br\s*\/?>/gi, "\n")
++      .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n\n")
++      .replace(/<[^>]+>/g, " "),
++  )
++    .replace(/[ \t\u00a0]+/g, " ")
++    .replace(/ *\n */g, "\n")
++    .replace(/\n{3,}/g, "\n\n")
++    .trim();
++}
++
++/** تبدیل ارقام فارسی/عربی به لاتین برای استخراج شماره و تاریخ. */
++export function normalizeDigits(input: string): string {
++  return input
++    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
++    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
++}
++
++/** حذف شماره‌گذاری ابتدای نام («1 - ...» یا «۱-...») و پسوند فایل. */
++export function cleanTitle(name: string): string {
++  const base = name.replace(/\.[a-z0-9]{2,5}$/i, "");
++  const stripped = base
++    .replace(/^\s*\d{1,3}\s*[-–—]\s*/u, "")
++    .replace(/^\s*[-–—]\s*/u, "")
++    .replace(/\s+/g, " ")
++    .trim();
++  return stripped || base.trim() || name.trim();
++}
++
++export function driveViewUrl(id: string, isFolder = false): string {
++  return isFolder
++    ? `${DRIVE_HOST}/drive/folders/${id}`
++    : `${DRIVE_HOST}/file/d/${id}/view`;
++}
++
++/** اجرای موازی با سقف هم‌زمانی — مودبانه و بدون فشار به منبع. */
++export async function mapWithConcurrency<T, R>(
++  items: T[],
++  limit: number,
++  worker: (item: T, index: number) => Promise<R>,
++): Promise<R[]> {
++  const results: R[] = new Array(items.length);
++  let cursor = 0;
++  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
++    while (cursor < items.length) {
++      const index = cursor++;
++      results[index] = await worker(items[index]!, index);
++    }
++  });
++  await Promise.all(runners);
++  return results;
++}
++
++async function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
++  return fetch(url, { ...init, signal: AbortSignal.timeout(30_000) });
++}
++
++/* ------------------------------------------------------------------ */
++/* حالت ۱: Drive API رسمی (با کلید)                                    */
++/* ------------------------------------------------------------------ */
++
++type ApiFile = {
++  id: string;
++  name: string;
++  mimeType: string;
++  size?: string;
++  modifiedTime?: string;
++};
++
++async function apiListChildren(folderId: string): Promise<DriveNode[]> {
++  const key = driveApiKey()!;
++  const out: DriveNode[] = [];
++  let pageToken: string | undefined;
++
++  do {
++    const url = new URL(`${DRIVE_API_BASE}/files`);
++    url.searchParams.set("q", `'${folderId}' in parents and trashed=false`);
++    url.searchParams.set(
++      "fields",
++      "nextPageToken,files(id,name,mimeType,size,modifiedTime)",
++    );
++    url.searchParams.set("pageSize", "1000");
++    url.searchParams.set("key", key);
++    url.searchParams.set("supportsAllDrives", "true");
++    url.searchParams.set("includeItemsFromAllDrives", "true");
++    if (pageToken) url.searchParams.set("pageToken", pageToken);
++
++    const res = await fetchWithTimeout(url.toString());
++    if (!res.ok) {
++      const body = await res.text();
++      throw new Error(`Google Drive API [${res.status}]: ${body.slice(0, 200)}`);
++    }
++    const json = (await res.json()) as { files: ApiFile[]; nextPageToken?: string };
++    for (const f of json.files ?? []) {
++      const isFolder = f.mimeType === "application/vnd.google-apps.folder";
++      out.push({
++        id: f.id,
++        name: f.name,
++        mimeType: f.mimeType,
++        isFolder,
++        size: f.size ? Number(f.size) : null,
++        modifiedTime: f.modifiedTime ?? null,
++        folderPath: "",
++        rootId: "",
++        rootName: "",
++        depth: 0,
++      });
++    }
++    pageToken = json.nextPageToken;
++  } while (pageToken);
++
++  return out;
++}
++
++/* ------------------------------------------------------------------ */
++/* حالت ۲: نمای تعبیه‌شده‌ی پوشه‌ی عمومی (بدون کلید)                    */
++/* ------------------------------------------------------------------ */
++
++type ViewEntry = { id: string; title: string; isFolder: boolean };
++
++async function viewListEntries(folderId: string): Promise<ViewEntry[]> {
++  const res = await fetchWithTimeout(
++    `${EMBEDDED_VIEW_BASE}?id=${encodeURIComponent(folderId)}`,
++    { headers: { "User-Agent": "Mozilla/5.0", "Accept-Language": "fa,en;q=0.8" } },
++  );
++  if (!res.ok) {
++    throw new Error(
++      `خواندن پوشه‌ی Google Drive ناموفق بود [${res.status}]. مطمئن شوید پوشه به‌صورت «هر کسی با لینک» به اشتراک گذاشته شده است.`,
++    );
++  }
++  const html = await res.text();
++  const entries: ViewEntry[] = [];
++  const seen = new Set<string>();
++  const entryRe = /<div class="flip-entry" id="entry-([\w-]+)"[^>]*>([\s\S]*?)<div class="flip-entry-title">([\s\S]*?)<\/div>/g;
++
++  let match: RegExpExecArray | null;
++  while ((match = entryRe.exec(html)) !== null) {
++    const id = match[1]!;
++    if (seen.has(id)) continue;
++    seen.add(id);
++    const href = /href="([^"]+)"/.exec(match[2] ?? "")?.[1] ?? "";
++    const isFolder = href.includes("/drive/folders/");
++    const title = toPlainText(match[3] ?? "").replace(/\s+/g, " ").trim();
++    if (!title) continue;
++    entries.push({ id, title, isFolder });
++  }
++  return entries;
++}
++
++/** حدس MIME از پسوند فایل — فقط برای حالت عمومی که متادیتای MIME ندارد. */
++export function guessMimeType(name: string): string {
++  const ext = (name.match(/\.([a-z0-9]{1,5})$/i)?.[1] ?? "").toLowerCase();
++  if (ext === "pdf") return "application/pdf";
++  if (["jpg", "jpeg", "png", "gif", "webp", "bmp", "heic"].includes(ext)) return `image/${ext === "jpg" ? "jpeg" : ext}`;
++  if (["txt", "md"].includes(ext)) return "text/plain";
++  if (ext === "csv") return "text/csv";
++  if (ext === "json") return "application/json";
++  if (["html", "htm"].includes(ext)) return "text/html";
++  if (ext === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
++  if (ext === "xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
++  if (ext === "doc") return "application/msword";
++  if (ext === "xls") return "application/vnd.ms-excel";
++  return "application/octet-stream";
++}
++
++/* ------------------------------------------------------------------ */
++/* پیمایش درخت مخزن                                                    */
++/* ------------------------------------------------------------------ */
++
++async function listChildrenOf(folderId: string): Promise<DriveNode[]> {
++  if (driveMode() === "api") return apiListChildren(folderId);
++
++  const entries = await viewListEntries(folderId);
++  return entries.map((entry) => ({
++    id: entry.id,
++    name: entry.title,
++    mimeType: entry.isFolder
++      ? "application/vnd.google-apps.folder"
++      : guessMimeType(entry.title),
++    isFolder: entry.isFolder,
++    size: null,
++    modifiedTime: null,
++    folderPath: "",
++    rootId: "",
++    rootName: "",
++    depth: 0,
++  }));
++}
++
++export type WalkOptions = { maxDepth?: number; maxNodes?: number };
++
++/**
++ * کل درخت پوشه‌ی مخزن را پیمایش می‌کند (BFS با سقف ایمنی).
++ * هر گره شامل مسیر پوشه و ریشه‌ی سطح‌بالای خودش است.
++ */
++export async function walkDriveTree(options: WalkOptions = {}): Promise<DriveNode[]> {
++  const maxDepth = options.maxDepth ?? 6;
++  const maxNodes = options.maxNodes ?? 4000;
++  const all: DriveNode[] = [];
++  const queue: Array<{ id: string; path: string; rootId: string; rootName: string; depth: number }> = [
++    { id: DRIVE_ROOT_FOLDER, path: "", rootId: "", rootName: "", depth: 0 },
++  ];
++  const failedFolders: string[] = [];
++
++  while (queue.length > 0 && all.length < maxNodes) {
++    const folder = queue.shift()!;
++    let children: DriveNode[];
++    try {
++      children = await listChildrenOf(folder.id);
++    } catch (error) {
++      console.error("drive walk folder failed", folder.path || "(root)", error);
++      failedFolders.push(folder.path || "(root)");
++      continue;
++    }
++
++    for (const child of children) {
++      if (all.length >= maxNodes) break;
++      const path = folder.path ? `${folder.path} / ${child.name}` : child.name;
++      const rootId = folder.rootId || child.id;
++      const rootName = folder.rootName || child.name;
++      const depth = folder.depth + 1;
++
++      // پوشه‌های آینه‌ی مخزن کد در سطح بالا را کامل رد کن (ایندکس و پیمایش) —
++      // محتوای قانونی ندارند و بودجه‌ی پیمایش را هدر می‌دهند.
++      const isMirrorFolder =
++        child.isFolder && depth === 1 && EXCLUDED_TOP_LEVEL.has(child.name.trim().toLowerCase());
++      if (isMirrorFolder) continue;
++
++      const node: DriveNode = {
++        ...child,
++        folderPath: folder.path,
++        rootId,
++        rootName,
++        depth,
++      };
++      all.push(node);
++      if (child.isFolder && depth < maxDepth) {
++        queue.push({ id: child.id, path, rootId, rootName, depth });
++      }
++    }
++
++    // حالت عمومی: مکث کوتاه بین پوشه‌ها برای جلوگیری از فشار به سرویس
++    if (driveMode() === "public-view") await new Promise((r) => setTimeout(r, 120));
++  }
++
++  if (failedFolders.length > 0) {
++    console.warn("drive walk: some folders skipped:", failedFolders.slice(0, 10).join(" | "));
++  }
++  return all;
++}
++
++/* ------------------------------------------------------------------ */
++/* دانلود و استخراج متن                                                */
++/* ------------------------------------------------------------------ */
++
++/**
++ * دانلود بایت‌های فایل. در حالت API، اسناد گوگل (Docs/Sheets) به
++ * متن/CSV صادر می‌شوند؛ در حالت عمومی از مسیر دانلود مستقیم استفاده می‌شود.
++ */
++export async function downloadDriveFile(id: string, mimeType: string): Promise<Response> {
++  if (driveMode() === "api") {
++    const key = driveApiKey()!;
++    const base = `${DRIVE_API_BASE}/files/${encodeURIComponent(id)}`;
++    const url =
++      mimeType === "application/vnd.google-apps.document"
++        ? `${base}/export?key=${key}&mimeType=${encodeURIComponent("text/plain")}`
++        : mimeType === "application/vnd.google-apps.spreadsheet"
++          ? `${base}/export?key=${key}&mimeType=${encodeURIComponent("text/csv")}`
++          : mimeType.startsWith("application/vnd.google-apps")
++            ? `${base}/export?key=${key}&mimeType=${encodeURIComponent("application/pdf")}`
++            : `${base}?key=${key}&alt=media&supportsAllDrives=true`;
++    const res = await fetchWithTimeout(url);
++    if (!res.ok) {
++      const body = await res.text();
++      throw new Error(`Google Drive دانلود [${res.status}]: ${body.slice(0, 200)}`);
++    }
++    return res;
++  }
++
++  // حالت عمومی: دانلود مستقیم (فایل‌های باینری/متنی معمولی)
++  let res = await fetchWithTimeout(`${DRIVE_HOST}/uc?export=download&id=${encodeURIComponent(id)}`);
++  if (res.ok && (res.headers.get("content-type") ?? "").includes("text/html")) {
++    // صفحه‌ی تأیید اسکن ویروس گوگل → تلاش با confirm=t
++    res = await fetchWithTimeout(
++      `${DRIVE_HOST}/uc?export=download&confirm=t&id=${encodeURIComponent(id)}`,
++    );
++  }
++  if (!res.ok) {
++    throw new Error(`دانلود فایل از Drive ناموفق بود [${res.status}]`);
++  }
++  return res;
++}
++
++export type ExtractionStatus = "text" | "pdf-text" | "needs-ocr" | "binary" | "empty" | "pending";
++
++const OCR_MIME_PREFIXES = ["image/"];
++const TEXTUAL_MIMES = ["text/plain", "text/csv", "text/html", "application/json"];
++const GOOGLE_DOC_MIMES = [
++  "application/vnd.google-apps.document",
++  "application/vnd.google-apps.spreadsheet",
++];
++
++/**
++ * استخراج متن از بایت‌های سند. برای PDFها در صورت موجود بودن unpdf
++ * از pdf.js استفاده می‌شود؛ تصاویر و باینری‌ها needs-ocr علامت می‌خورند.
++ */
++export async function extractDriveText(
++  name: string,
++  mimeType: string,
++  bytes: Uint8Array,
++): Promise<{ text: string; status: ExtractionStatus }> {
++  const mime = mimeType || guessMimeType(name);
++
++  if (mime.startsWith("text/") || TEXTUAL_MIMES.includes(mime) || GOOGLE_DOC_MIMES.includes(mime)) {
++    const text = toPlainText(new TextDecoder("utf-8").decode(bytes));
++    return { text, status: text.trim().length > 0 ? "text" : "empty" };
++  }
++
++  if (mime === "application/pdf") {
++    try {
++      const { extractText, getDocumentProxy } = await import("unpdf");
++      const pdf = await getDocumentProxy(bytes);
++      const { text } = await extractText(pdf, { mergePages: true });
++      const merged = (Array.isArray(text) ? text.join("\n\n") : text).trim();
++      // PDFهای فارسیِ بدساخت، نویسه‌های جدا (presentation forms) برمی‌گردانند —
++      // این متن برای جستجو بی‌ارزش است؛ به‌جای ذخیره، needs-ocr علامت می‌خورَد.
++      const forms = (merged.match(/[\uFB50-\uFDFF\uFE70-\uFEFF]/g) ?? []).length;
++      const garbled = merged.length > 0 && forms / merged.length > 0.25;
++      if (garbled) return { text: "", status: "needs-ocr" };
++      return { text: merged, status: merged.length > 40 ? "pdf-text" : "needs-ocr" };
++    } catch (error) {
++      // unpdf نصب نیست یا PDF متن قابل استخراج ندارد (اسکن‌شده) → needs-ocr
++      console.warn("pdf extract skipped", name, (error as Error).message?.slice(0, 120));
++      return { text: "", status: "needs-ocr" };
++    }
++  }
++
++  if (OCR_MIME_PREFIXES.some((prefix) => mime.startsWith(prefix))) {
++    return { text: "", status: "needs-ocr" };
++  }
++
++  return { text: "", status: "binary" };
++}
++
++/* ------------------------------------------------------------------ */
++/* سیاست منابع: چه چیزی «قانون» محسوب می‌شود                            */
++/* ------------------------------------------------------------------ */
++
++/**
++ * پوشه‌های آینه‌ی مخزن کد و فایل‌های عملیاتی که نباید به‌عنوان «قانون»
++ * در فهرست کتاب‌ها ظاهر شوند (در ایندکس جستجو می‌مانند ولی کتاب نمی‌شوند).
++ */
++const EXCLUDED_TOP_LEVEL = new Set([
++  "apps",
++  "data",
++  "docs",
++  "domains",
++  "infra",
++  "knowledge",
++  "packages",
++  "scripts",
++  "services",
++  "templates",
++  "tests",
++  "src",
++]);
++
++const EXCLUDED_TOP_FILES = new Set([
++  "readme.md",
++  ".gitignore",
++  ".env.example",
++  "111.xlsx",
++  "رونوشت 111.xlsx",
++  "سایت های متصل به درایور.xlsx",
++  "سایت های متصل به درایور",
++  "لیست بخشنامه های درایور",
++]);
++
++export function isLibraryBook(node: DriveNode): boolean {
++  // فرزندان مستقیم ریشه‌ی مخزن (پیمایش، ریشه را عمق ۰ می‌گیرد → سطح بالا = عمق ۱)
++  if (node.depth !== 1) return false;
++  const name = node.name.trim();
++  if (EXCLUDED_TOP_LEVEL.has(name.toLowerCase())) return false;
++  if (EXCLUDED_TOP_FILES.has(name.toLowerCase())) return false;
++  if (name.startsWith(".")) return false;
++  return true;
++}
++
++/** آیا این سند «بخشنامه» محسوب می‌شود؟ (مسیر یا نام حاوی بخشنامه) */
++export function isCircularLike(node: DriveNode): boolean {
++  if (node.isFolder) return false;
++  const haystack = `${node.name} ${node.folderPath}`;
++  return haystack.includes("بخشنامه");
++}
+diff --git a/apps/mka-core/src/lib/library.functions.ts b/apps/mka-core/src/lib/library.functions.ts
+index a977e51..cbe2839 100644
+--- a/apps/mka-core/src/lib/library.functions.ts
++++ b/apps/mka-core/src/lib/library.functions.ts
+@@ -1,8 +1,8 @@
+ import { createServerFn } from "@tanstack/react-start";
+-import { requireAdmin } from "./admin-middleware";
+ import { createClient } from "@supabase/supabase-js";
+ import { z } from "zod";
+ import type { Database } from "@/integrations/supabase/types";
++import { requireAdmin } from "./admin-middleware";
+ 
+ function publicClient() {
+   const key = process.env["SUPABASE_PUBLISHABLE_KEY"]!;
+@@ -21,6 +21,10 @@ function publicClient() {
+   });
+ }
+ 
++/* ------------------------------------------------------------------ */
++/* خواندن کتابخانه                                                     */
++/* ------------------------------------------------------------------ */
++
+ export const listBooks = createServerFn({ method: "GET" }).handler(async () => {
+   const supabase = publicClient();
+   const [{ data: books, error }, { count }] = await Promise.all([
+@@ -67,54 +71,145 @@ export const searchArticles = createServerFn({ method: "GET" })
+     return { results: results ?? [] };
+   });
+ 
+-export const syncBooks = createServerFn({ method: "POST" }).middleware([requireAdmin]).handler(async () => {
+-  const { fetchBookIndex, isTaxRelated } = await import("./hy-scrape.server");
++/* ------------------------------------------------------------------ */
++/* همگام‌سازی از مخزن Google Drive (جایگزین اسکرپر همراه‌یار)          */
++/* ------------------------------------------------------------------ */
++
++/**
++ * کل مخزن Google Drive سازمان را پیمایش و ایندکس می‌کند:
++ *   ۱) هر فایل → جدول drive_documents (متادیتا + وضعیت استخراج متن)
++ *   ۲) هر پوشه/فایل سطح‌بالای قانونی → جدول books
++ *   ۳) هر فایل داخل هر قانون → جدول articles (برای جستجوی متن کامل)
++ */
++export const syncBooks = createServerFn({ method: "POST" })
++  .middleware([requireAdmin])
++  .handler(async () => {
++  const {
++    walkDriveTree,
++    cleanTitle,
++    driveViewUrl,
++    isLibraryBook,
++    DRIVE_PREFIX,
++  } = await import("./gdrive-source.server");
+   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+ 
+-  const all = await fetchBookIndex();
+-  const taxBooks = all.filter(isTaxRelated);
+-  if (taxBooks.length === 0) throw new Error("هیچ کتاب مالیاتی در فهرست منبع پیدا نشد.");
+-
+-  const { error } = await supabaseAdmin.from("books").upsert(
+-    taxBooks.map((book) => ({
+-      source_id: book.sourceId,
+-      title: book.title,
+-      url: book.url,
+-      category: book.category,
+-    })),
+-    { onConflict: "source_id" },
++  const nodes = await walkDriveTree();
++  if (nodes.length === 0) {
++    throw new Error(
++      "مخزن Google Drive خوانده نشد. مطمئن شوید پوشه به اشتراک گذاشته شده و در دسترس است.",
++    );
++  }
++  const files = nodes.filter((node) => !node.isFolder);
++
++  // ۱) ایندکس کامل متادیتا در drive_documents
++  const docRows = files.map((file) => ({
++    id: file.id,
++    name: file.name,
++    folder_path: file.folderPath || null,
++    root_id: file.rootId || null,
++    root_name: file.rootName || null,
++    mime_type: file.mimeType,
++    size: file.size,
++    modified_time: file.modifiedTime,
++    drive_url: driveViewUrl(file.id),
++    synced_at: new Date().toISOString(),
++  }));
++  for (let i = 0; i < docRows.length; i += 500) {
++    const { error } = await supabaseAdmin
++      .from("drive_documents")
++      .upsert(docRows.slice(i, i + 500), { onConflict: "id" });
++    if (error) throw new Error(error.message);
++  }
++
++  // ۲) کتاب‌ها: موارد سطح‌بالای مخزن (پوشه‌های قوانین و اسناد مستقل)
++  const topLevel = nodes.filter(isLibraryBook);
++  const bookRows = topLevel.map((node) => ({
++    source_id: DRIVE_PREFIX + node.id,
++    title: cleanTitle(node.name),
++    url: driveViewUrl(node.id, node.isFolder),
++    category: "مخزن اسناد Google Drive",
++  }));
++  for (let i = 0; i < bookRows.length; i += 500) {
++    const { error } = await supabaseAdmin
++      .from("books")
++      .upsert(bookRows.slice(i, i + 500), { onConflict: "source_id" });
++    if (error) throw new Error(error.message);
++  }
++
++  // ۳) مواد/اسناد هر قانون
++  const articleRows: Array<{
++    source_id: string;
++    book_source_id: string;
++    title: string;
++    label: string;
++    chapter: string | null;
++    url: string;
++    order_index: number;
++  }> = [];
++  for (const node of topLevel) {
++    const children = node.isFolder
++      ? files.filter((file) => file.rootId === node.id && file.id !== node.id)
++      : [node];
++    children.forEach((file, index) => {
++      const chapter = file.folderPath
++        ? file.folderPath.split(" / ").slice(1).join(" / ").trim() || null
++        : null;
++      articleRows.push({
++        source_id: DRIVE_PREFIX + file.id,
++        book_source_id: DRIVE_PREFIX + node.id,
++        title: cleanTitle(file.name),
++        label: cleanTitle(file.name),
++        chapter,
++        url: driveViewUrl(file.id),
++        order_index: index,
++      });
++    });
++  }
++  for (let i = 0; i < articleRows.length; i += 500) {
++    const { error } = await supabaseAdmin
++      .from("articles")
++      .upsert(articleRows.slice(i, i + 500), { onConflict: "source_id" });
++    if (error) throw new Error(error.message);
++  }
++
++  // ۴) شمارش اسناد هر کتاب
++  const counts = new Map<string, number>();
++  for (const row of articleRows) {
++    counts.set(row.book_source_id, (counts.get(row.book_source_id) ?? 0) + 1);
++  }
++  await Promise.all(
++    [...counts.entries()].map(([sourceId, count]) =>
++      supabaseAdmin.from("books").update({ articles_count: count }).eq("source_id", sourceId),
++    ),
+   );
+-  if (error) throw new Error(error.message);
+-  return { found: all.length, saved: taxBooks.length };
++
++  return {
++    found: nodes.length,
++    indexed: files.length,
++    books: bookRows.length,
++    articles: articleRows.length,
++  };
+ });
+ 
+-export const scrapeBook = createServerFn({ method: "POST" }).middleware([requireAdmin])
++/**
++ * استخراج متن دسته‌ای اسناد یک قانون از مخزن Drive و ذخیره در articles
++ * (و همگام‌سازی با drive_documents برای جستجو).
++ */
++export const scrapeBook = createServerFn({ method: "POST" })
++  .middleware([requireAdmin])
+   .inputValidator((input: unknown) =>
+     z.object({ sourceId: z.string(), batchSize: z.number().int().optional() }).parse(input),
+   )
+   .handler(async ({ data }) => {
+-    const { fetchBookArticles, fetchArticleDetail, mapWithConcurrency } = await import(
+-      "./hy-scrape.server"
+-    );
++    const {
++      downloadDriveFile,
++      extractDriveText,
++      mapWithConcurrency,
++      DRIVE_PREFIX,
++    } = await import("./gdrive-source.server");
+     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+     const batchSize = Math.min(Math.max(data.batchSize ?? 20, 1), 40);
+ 
+-    const toc = await fetchBookArticles(data.sourceId);
+-    if (toc.length === 0) return { total: 0, scraped: 0, remaining: 0 };
+-
+-    await supabaseAdmin.from("articles").upsert(
+-      toc.map((article) => ({
+-        source_id: article.sourceId,
+-        book_source_id: data.sourceId,
+-        title: article.label,
+-        label: article.label,
+-        chapter: article.chapter,
+-        url: article.url,
+-        order_index: article.orderIndex,
+-      })),
+-      { onConflict: "source_id" },
+-    );
+-
+     const { data: pending } = await supabaseAdmin
+       .from("articles")
+       .select("source_id")
+@@ -128,46 +223,51 @@ export const scrapeBook = createServerFn({ method: "POST" }).middleware([require
+ 
+     await mapWithConcurrency(batch, 4, async (row) => {
+       try {
+-        const detail = await fetchArticleDetail(row.source_id);
++        const fileId = row.source_id.startsWith(DRIVE_PREFIX)
++          ? row.source_id.slice(DRIVE_PREFIX.length)
++          : row.source_id;
++        const { data: doc } = await supabaseAdmin
++          .from("drive_documents")
++          .select("name, mime_type")
++          .eq("id", fileId)
++          .maybeSingle();
++        const mime = doc?.mime_type ?? "";
++        const res = await downloadDriveFile(fileId, mime);
++        const bytes = new Uint8Array(await res.arrayBuffer());
++        const { text, status } = await extractDriveText(doc?.name ?? fileId, mime, bytes);
++        const stored = text.slice(0, 200_000) || null;
+         await supabaseAdmin
+           .from("articles")
+-          .update({
+-            title: detail.title,
+-            content: detail.content,
+-            scraped_at: new Date().toISOString(),
+-          })
++          .update({ content: stored, scraped_at: new Date().toISOString() })
+           .eq("source_id", row.source_id);
+-
+-        if (detail.regulations.length > 0) {
+-          await supabaseAdmin.from("article_regulations").upsert(
+-            detail.regulations.map((regulation) => ({
+-              article_source_id: row.source_id,
+-              kind: regulation.kind,
+-              number: regulation.number,
+-              reg_date: regulation.regDate,
+-              subject: regulation.subject,
+-            })),
+-            { onConflict: "article_source_id,kind,number,subject", ignoreDuplicates: true },
+-          );
+-        }
++        await supabaseAdmin
++          .from("drive_documents")
++          .update({ content: stored, extraction_status: status })
++          .eq("id", fileId);
+         scraped += 1;
+       } catch (error) {
+-        console.error("scrape article failed", row.source_id, error);
++        console.error("drive article extract failed", row.source_id, error);
+       }
+     });
+ 
+-    const { count: remaining } = await supabaseAdmin
+-      .from("articles")
+-      .select("*", { count: "exact", head: true })
+-      .eq("book_source_id", data.sourceId)
+-      .is("scraped_at", null);
++    const [{ count: total }, { count: remaining }] = await Promise.all([
++      supabaseAdmin
++        .from("articles")
++        .select("*", { count: "exact", head: true })
++        .eq("book_source_id", data.sourceId),
++      supabaseAdmin
++        .from("articles")
++        .select("*", { count: "exact", head: true })
++        .eq("book_source_id", data.sourceId)
++        .is("scraped_at", null),
++    ]);
+ 
+     await supabaseAdmin
+       .from("books")
+-      .update({ articles_count: toc.length, scraped_at: new Date().toISOString() })
++      .update({ scraped_at: new Date().toISOString() })
+       .eq("source_id", data.sourceId);
+ 
+-    return { total: toc.length, scraped, remaining: remaining ?? 0 };
++    return { total: total ?? 0, scraped, remaining: remaining ?? 0 };
+   });
+ 
+ /* ---------------------------- بخشنامه‌ها ---------------------------- */
+@@ -208,39 +308,60 @@ export const getCircular = createServerFn({ method: "GET" })
+     return { circular: circular ?? null };
+   });
+ 
+-/** فهرست بخشنامه‌ها را با صفحه‌بندی r از moghar_list دریافت و ذخیره می‌کند. */
+-export const syncCircularList = createServerFn({ method: "POST" }).middleware([requireAdmin])
++/**
++ * فهرست بخشنامه‌ها را از مخزن Google Drive می‌سازد — هر سندی که نام یا
++ * مسیرش حاوی «بخشنامه» باشد (یا با عبارت داده‌شده مطابقت کند).
++ */
++export const syncCircularList = createServerFn({ method: "POST" })
++  .middleware([requireAdmin])
+   .inputValidator((input: unknown) =>
+     z
+       .object({ term: z.string().optional(), maxPages: z.number().int().min(1).max(400).optional() })
+       .parse(input ?? {}),
+   )
+   .handler(async ({ data }) => {
+-    const { fetchAllCircularRows, CIRCULAR_QUERY_TERMS } = await import("./hy-scrape.server");
++    const {
++      walkDriveTree,
++      cleanTitle,
++      driveViewUrl,
++      isCircularLike,
++      normalizeDigits,
++      DRIVE_PREFIX,
++    } = await import("./gdrive-source.server");
+     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+ 
+-    const terms = data.term ? [data.term] : CIRCULAR_QUERY_TERMS;
+-    let saved = 0;
++    const nodes = await walkDriveTree();
++    let candidates = nodes.filter(isCircularLike);
++    const term = (data.term ?? "").trim();
++    if (term.length > 1) {
++      candidates = candidates.filter((node) => `${node.name} ${node.folderPath}`.includes(term));
++    }
+ 
+-    for (const term of terms) {
+-      const rows = await fetchAllCircularRows(term, { maxPages: data.maxPages ?? 200 });
+-      if (rows.length === 0) continue;
++    let saved = 0;
++    if (candidates.length > 0) {
++      const rows = candidates.map((node) => {
++        const normalized = normalizeDigits(node.name);
++        const number =
++          /(?:شماره|ش\.|نامه)?\s*([0-9]{2,10}(?:\s*[-/]\s*[0-9]{1,6})*)/.exec(normalized)?.[1]
++            ?.replace(/\s+/g, "") ?? null;
++        const regDate =
++          /\b(1[34][0-9]{2})[/\-.](0?[1-9]|1[0-2])[/\-.](0?[1-9]|[12][0-9]|3[01])\b/.exec(normalized)?.[0]?.replace(/[.\-]/g, "/") ?? null;
++        return {
++          source_id: DRIVE_PREFIX + node.id,
++          kind: "بخشنامه",
++          number,
++          reg_date: regDate,
++          subject: cleanTitle(node.name),
++          url: driveViewUrl(node.id),
++          query_term: "drive",
++        };
++      });
+       for (let i = 0; i < rows.length; i += 500) {
+-        const chunk = rows.slice(i, i + 500);
+-        const { error } = await supabaseAdmin.from("circulars").upsert(
+-          chunk.map((row) => ({
+-            source_id: row.sourceId,
+-            kind: row.kind,
+-            number: row.number,
+-            reg_date: row.regDate,
+-            subject: row.subject,
+-            url: row.url,
+-            query_term: term,
+-          })),
+-          { onConflict: "source_id", ignoreDuplicates: false },
+-        );
++        const { error } = await supabaseAdmin
++          .from("circulars")
++          .upsert(rows.slice(i, i + 500), { onConflict: "source_id" });
+         if (error) throw new Error(error.message);
+-        saved += chunk.length;
++        saved += Math.min(500, rows.length - i);
+       }
+     }
+ 
+@@ -250,13 +371,19 @@ export const syncCircularList = createServerFn({ method: "POST" }).middleware([r
+     return { saved, total: count ?? 0 };
+   });
+ 
+-/** متن کامل بخشنامه‌های ذخیره‌نشده را دسته‌ای استخراج می‌کند. */
+-export const scrapeCirculars = createServerFn({ method: "POST" }).middleware([requireAdmin])
++/** استخراج متن کامل بخشنامه‌های ذخیره‌نشده از مخزن Drive. */
++export const scrapeCirculars = createServerFn({ method: "POST" })
++  .middleware([requireAdmin])
+   .inputValidator((input: unknown) =>
+     z.object({ batchSize: z.number().int().min(1).max(40).optional() }).parse(input ?? {}),
+   )
+   .handler(async ({ data }) => {
+-    const { fetchCircularDetail, mapWithConcurrency } = await import("./hy-scrape.server");
++    const {
++      downloadDriveFile,
++      extractDriveText,
++      mapWithConcurrency,
++      DRIVE_PREFIX,
++    } = await import("./gdrive-source.server");
+     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+     const batchSize = data.batchSize ?? 20;
+ 
+@@ -271,20 +398,30 @@ export const scrapeCirculars = createServerFn({ method: "POST" }).middleware([re
+ 
+     await mapWithConcurrency(batch, 4, async (row) => {
+       try {
+-        const detail = await fetchCircularDetail(row.source_id);
++        const fileId = row.source_id.startsWith(DRIVE_PREFIX)
++          ? row.source_id.slice(DRIVE_PREFIX.length)
++          : row.source_id;
++        const { data: doc } = await supabaseAdmin
++          .from("drive_documents")
++          .select("name, mime_type")
++          .eq("id", fileId)
++          .maybeSingle();
++        const mime = doc?.mime_type ?? "";
++        const res = await downloadDriveFile(fileId, mime);
++        const bytes = new Uint8Array(await res.arrayBuffer());
++        const { text, status } = await extractDriveText(doc?.name ?? fileId, mime, bytes);
++        const stored = text.slice(0, 200_000) || null;
+         await supabaseAdmin
+           .from("circulars")
+-          .update({
+-            ...(detail.title ? { subject: detail.title } : {}),
+-            content: detail.content,
+-            ...(detail.number ? { number: detail.number } : {}),
+-            ...(detail.regDate ? { reg_date: detail.regDate } : {}),
+-            scraped_at: new Date().toISOString(),
+-          })
++          .update({ content: stored, scraped_at: new Date().toISOString() })
+           .eq("source_id", row.source_id);
++        await supabaseAdmin
++          .from("drive_documents")
++          .update({ content: stored, extraction_status: status })
++          .eq("id", fileId);
+         scraped += 1;
+       } catch (error) {
+-        console.error("scrape circular failed", row.source_id, error);
++        console.error("drive circular extract failed", row.source_id, error);
+       }
+     });
+ 
+@@ -296,6 +433,32 @@ export const scrapeCirculars = createServerFn({ method: "POST" }).middleware([re
+     return { scraped, remaining: remaining ?? 0 };
+   });
+ 
++/* ---------------------------- وضعیت مخزن ---------------------------- */
++
++/** وضعیت اتصال و پیشرفت ایندکس مخزن Drive — برای نمایش در پنل همگام‌سازی. */
++export const getDriveStatus = createServerFn({ method: "GET" }).handler(async () => {
++  const { driveMode, DRIVE_ROOT_FOLDER } = await import("./gdrive-source.server");
++  const supabase = publicClient();
++  const [indexed, extracted, needsOcr] = await Promise.all([
++    supabase.from("drive_documents").select("*", { count: "exact", head: true }),
++    supabase
++      .from("drive_documents")
++      .select("*", { count: "exact", head: true })
++      .not("content", "is", null),
++    supabase
++      .from("drive_documents")
++      .select("*", { count: "exact", head: true })
++      .eq("extraction_status", "needs-ocr"),
++  ]);
++  return {
++    mode: driveMode(),
++    rootFolder: DRIVE_ROOT_FOLDER,
++    indexed: indexed.count ?? 0,
++    extracted: extracted.count ?? 0,
++    needsOcr: needsOcr.count ?? 0,
++  };
++});
++
+ /* ---------------------------- جستجوی یکپارچه و آمار ---------------------------- */
+ 
+ export const getStats = createServerFn({ method: "GET" }).handler(async () => {
+@@ -449,10 +612,41 @@ export const searchAll = createServerFn({ method: "GET" })
+     };
+   });
+ 
+-export const triggerDriveSync = createServerFn({ method: "POST" }).middleware([requireAdmin]).handler(async () => {
+-  const { syncDrive } = await import("./drive-sync.server");
+-  return syncDrive({ ocrLimit: 30 });
+-});
++export const triggerDriveSync = createServerFn({ method: "POST" })
++  .middleware([requireAdmin])
++  .handler(async () => {
++    // اولویت: سرویس Drive پلتفرم (با OCR هوش مصنوعی) در صورت پیکربندی؛
++    // در غیر این صورت، همگام‌سازی مستقیم از مخزن بدون هیچ سرویس ثالث.
++    if (process.env["LOVABLE_API_KEY"] && process.env["GOOGLE_DRIVE_API_KEY"]) {
++      const { syncDrive } = await import("./drive-sync.server");
++      return syncDrive({ ocrLimit: 30 });
++    }
++    const { walkDriveTree, cleanTitle, driveViewUrl, DRIVE_PREFIX } = await import(
++      "./gdrive-source.server"
++    );
++    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
++    const nodes = await walkDriveTree();
++    const files = nodes.filter((node) => !node.isFolder);
++    const docRows = files.map((file) => ({
++      id: file.id,
++      name: file.name,
++      folder_path: file.folderPath || null,
++      root_id: file.rootId || null,
++      root_name: file.rootName || null,
++      mime_type: file.mimeType,
++      size: file.size,
++      modified_time: file.modifiedTime,
++      drive_url: driveViewUrl(file.id),
++      synced_at: new Date().toISOString(),
++    }));
++    for (let i = 0; i < docRows.length; i += 500) {
++      const { error } = await supabaseAdmin
++        .from("drive_documents")
++        .upsert(docRows.slice(i, i + 500) as never, { onConflict: "id" });
++      if (error) throw new Error(error.message);
++    }
++    return { indexed: docRows.length, extracted: 0, remaining: 0 };
++  });
+ 
+ export const checkIsAdmin = createServerFn({ method: "GET" })
+   .middleware([requireAdmin])
+diff --git a/apps/mka-core/src/lib/official-sources.server.ts b/apps/mka-core/src/lib/official-sources.server.ts
+new file mode 100644
+index 0000000..c7fc57c
+--- /dev/null
++++ b/apps/mka-core/src/lib/official-sources.server.ts
+@@ -0,0 +1,138 @@
++/**
++ * منابع رسمی دولتی — دسترسی خودکار فقط با اجازه‌ی صریح مالک پروژه.
++ *
++ * سیاست پروژه (طبق دستور مالک):
++ *   ۱) منبع اصلی داده، مخزن اختصاصی Google Drive سازمان است (gdrive-source.server.ts).
++ *   ۲) اگر اطلاعات یا تأییدیه‌ای در مخزن وجود نداشت، پیش از هرگونه مراجعه به
++ *      منابع رسمی باید با مالک پروژه مشورت شود و اجازه گرفته شود.
++ *   ۳) اجازه فقط از مسیر متغیر محیطی OFFICIAL_FALLBACK_APPROVED=true
++ *      (در Vercel / محیط اجرا) اعطا می‌شود — نه از داخل کد و نه از UI.
++ *
++ * تا زمانی که این پرچم فعال نشده باشد:
++ *   - هیچ درخواست شبکه‌ای به سایت‌های رسمی زده نمی‌شود؛
++ *   - توابع واکشی خطای شفاف فارسی با راهنمای اقدام برمی‌گردانند؛
++ *   - لینک‌های جستجوی رسمی (بدون واکشی) به‌عنوان پیشنهاد مراجعه در دسترس‌اند.
++ */
++
++export type OfficialSite = {
++  id: string;
++  label: string;
++  host: string;
++  home: string;
++};
++
++/** سایت‌های رسمی مورد تأیید مالک برای مراجعه (فقط با اجازه واکشی می‌شوند). */
++export const OFFICIAL_SITES: OfficialSite[] = [
++  {
++    id: "tax",
++    label: "سازمان امور مالیاتی ایران",
++    host: "tax.gov.ir",
++    home: "https://tax.gov.ir",
++  },
++  {
++    id: "intamedia",
++    label: "پایگاه اطلاع‌رسانی سازمان امور مالیاتی",
++    host: "intamedia.ir",
++    home: "https://intamedia.ir",
++  },
++  {
++    id: "majlis-rc",
++    label: "مرکز پژوهش‌های مجلس — قوانین و مقررات",
++    host: "rc.majlis.ir",
++    home: "https://rc.majlis.ir",
++  },
++  {
++    id: "qavanin",
++    label: "پایگاه ملی اطلاع‌رسانی قوانین و مقررات",
++    host: "qavanin.ir",
++    home: "https://qavanin.ir",
++  },
++  {
++    id: "rooznameh-rasmi",
++    label: "روزنامه رسمی کشور",
++    host: "rooznamehrasmi.ir",
++    home: "https://www.rooznamehrasmi.ir",
++  },
++];
++
++const ALLOWED_HOSTS = new Set<string>(
++  OFFICIAL_SITES.flatMap((site) => [site.host, `www.${site.host}`]),
++);
++
++export function isOfficialFallbackApproved(): boolean {
++  return process.env["OFFICIAL_FALLBACK_APPROVED"] === "true";
++}
++
++/** پیام استاندارد برای حالت «اجازه داده نشده» — شامل مسیر دقیق اقدام. */
++export function officialApprovalMessage(action: string): string {
++  return [
++    `مراجعه به منابع رسمی («${action}») هنوز مجاز نشده است.`,
++    "طبق سیاست پروژه، در صورت نبود سند یا تأییدیه در مخزن Google Drive، ابتدا باید با مالک پروژه مشورت کنید و پس از دریافت اجازه، متغیر محیطی OFFICIAL_FALLBACK_APPROVED را با مقدار true در تنظیمات Vercel ثبت کنید.",
++    "تا آن زمان، فقط لینک‌های مراجعه‌ی دستی به سایت‌های رسمی ارائه می‌شود و هیچ داده‌ای به‌صورت خودکار از آن‌ها دریافت یا ذخیره نمی‌شود.",
++  ].join(" ");
++}
++
++/**
++ * گیتِ اجازه — هر تابعی که بخواهد واقعاً به سایت رسمی درخواست بزند،
++ * موظف است اول این تابع را صدا بزند. در غیر این صورت خطا می‌دهد.
++ */
++export function assertOfficialApproval(action: string): void {
++  if (!isOfficialFallbackApproved()) {
++    throw new Error(officialApprovalMessage(action));
++  }
++}
++
++export type OfficialLink = { site: string; label: string; url: string };
++
++/**
++ * لینک‌های جستجوی رسمی برای یک عبارت — بدون هیچ واکشی شبکه‌ای.
++ * این لینک‌ها همیشه در دسترس‌اند چون صرفاً مراجعه‌ی دستی را پیشنهاد می‌دهند.
++ */
++export function officialSearchLinks(query: string): OfficialLink[] {
++  const q = query.trim().slice(0, 120);
++  if (q.length < 2) return [];
++  return OFFICIAL_SITES.map((site) => ({
++    site: site.id,
++    label: site.label,
++    url: `https://www.google.com/search?q=${encodeURIComponent(`site:${site.host} ${q}`)}`,
++  }));
++}
++
++/**
++ * واکشی متن یک صفحه از سایت‌های رسمی — دو لایه محافظت:
++ *   ۱) گیتِ اجازه‌ی مالک (assertOfficialApproval)
++ *   ۲) لیست سفید دامنه‌ها (ضد SSRF — فقط دامنه‌های رسمی تعریف‌شده)
++ */
++export async function fetchOfficialPageText(rawUrl: string): Promise<string> {
++  assertOfficialApproval("واکشی محتوای منبع رسمی");
++
++  let parsed: URL;
++  try {
++    parsed = new URL(rawUrl);
++  } catch {
++    throw new Error("نشانی منبع رسمی نامعتبر است.");
++  }
++  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
++    throw new Error("پروتکل نشانی منبع رسمی مجاز نیست.");
++  }
++  const host = parsed.hostname.toLowerCase();
++  const allowed = [...ALLOWED_HOSTS].some(
++    (h) => host === h || host.endsWith(`.${h.replace(/^www\./, "")}`),
++  );
++  if (!allowed) {
++    throw new Error(`دامنه‌ی «${host}» در فهرست منابع رسمی مورد تأیید نیست.`);
++  }
++
++  const res = await fetch(rawUrl, {
++    signal: AbortSignal.timeout(25_000),
++    headers: {
++      "User-Agent": "MKA-Law-Library/1.0 (approved official-source fetch)",
++      "Accept-Language": "fa,en;q=0.8",
++    },
++  });
++  if (!res.ok) {
++    throw new Error(`دریافت صفحه‌ی رسمی ناموفق بود [${res.status}]: ${rawUrl}`);
++  }
++  const { toPlainText } = await import("./gdrive-source.server");
++  return toPlainText(await res.text());
++}
+diff --git a/apps/mka-core/supabase/migrations/20261024080000_drive_documents.sql b/apps/mka-core/supabase/migrations/20261024080000_drive_documents.sql
+new file mode 100644
+index 0000000..37be9a6
+--- /dev/null
++++ b/apps/mka-core/supabase/migrations/20261024080000_drive_documents.sql
+@@ -0,0 +1,34 @@
++-- جدول ایندکس مخزن Google Drive — جایگزین منبع همراه‌یار
++-- هر فایل/پوشه‌ی مخزن اسناد مالیاتی مالک پروژه اینجا فهرست و متن‌کاوی می‌شود.
++
++CREATE TABLE IF NOT EXISTS public.drive_documents (
++  id text PRIMARY KEY,                       -- شناسه‌ی فایل Google Drive
++  name text NOT NULL,
++  folder_path text,                          -- مسیر پوشه‌ها از ریشه‌ی مخزن
++  root_id text,                              -- شناسه‌ی پوشه‌ی سطح‌بالای ریشه
++  root_name text,                            -- نام پوشه‌ی سطح‌بالای ریشه (قانون اصلی)
++  mime_type text,
++  size bigint,
++  modified_time timestamptz,
++  drive_url text NOT NULL DEFAULT '',        -- لینک مشاهده در Drive
++  extraction_status text NOT NULL DEFAULT 'pending',
++                                             -- pending | text | pdf-text | needs-ocr | binary | empty
++  content text,                              -- متن استخراج‌شده (در صورت امکان)
++  synced_at timestamptz,
++  created_at timestamptz NOT NULL DEFAULT now()
++);
++
++GRANT SELECT ON public.drive_documents TO anon;
++GRANT SELECT ON public.drive_documents TO authenticated;
++GRANT ALL ON public.drive_documents TO service_role;
++
++ALTER TABLE public.drive_documents ENABLE ROW LEVEL SECURITY;
++DROP POLICY IF EXISTS "Drive documents are publicly readable" ON public.drive_documents;
++CREATE POLICY "Drive documents are publicly readable" ON public.drive_documents FOR SELECT USING (true);
++
++CREATE INDEX IF NOT EXISTS drive_documents_folder_idx ON public.drive_documents (root_id);
++CREATE INDEX IF NOT EXISTS drive_documents_status_idx ON public.drive_documents (extraction_status);
++CREATE INDEX IF NOT EXISTS drive_documents_name_trgm_idx
++  ON public.drive_documents USING gin (name extensions.gin_trgm_ops);
++CREATE INDEX IF NOT EXISTS drive_documents_content_trgm_idx
++  ON public.drive_documents USING gin (content extensions.gin_trgm_ops);

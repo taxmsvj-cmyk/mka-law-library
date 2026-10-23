@@ -42,7 +42,8 @@
 1. regulation.tax.gov.ir
 2. qavanin.ir / rrk.ir
 3. intamedia.ir / tax.gov.ir
-4. hamrahyaar.com (پس از تطبیق با منبع رسمی)
+4. مخزن Google Drive سازمان (منبع اصلی نرم‌افزار)
+   — سایت همراه‌یار از چرخه‌ی منابع حذف شد (ریسک حقوقی وابستگی به سایت ثالث)
 5. آراء دیوان عدالت اداری
 6. Wikipedia فقط زمینه عمومی
 
@@ -53,7 +54,11 @@
 | اولین منبع / مخزن جستجو (Primary Vault) | https://drive.google.com/drive/folders/1NcBkZOTemmVfnNKY7FgxuqbIXj6f4Dtl |
 | منبع پشتیبان هنگام قطع سایت‌های رسمی (Working Drive) | https://drive.google.com/drive/folders/1Jx0cipUqQyGnJk4hFCURzWIg1Abo1Del |
 
-**سیاست:** رسمی آنلاین → Primary Vault → Working Drive → همراه‌یار
+**سیاست منبع داده‌ی نرم‌افزار (به‌روزرسانی ۱۴۰۴/۰۸):** نرم‌افزار داده را فقط از مخزن
+Google Drive (Working Drive بالا) همگام‌سازی می‌کند؛ سایت همراه‌یار به‌طور کامل حذف شد.
+در صورت نبود سند یا تأییدیه در مخزن، مراجعه به سایت‌های رسمی (موارد ۱ تا ۳ بالا) فقط
+پس از مشورت با مالک پروژه و با اجازه‌ی او انجام می‌شود
+(پرچم `OFFICIAL_FALLBACK_APPROVED` در Vercel — پیش‌فرض: بسته).
 
 در پنل Lovable:
 - PRIMARY_KNOWLEDGE_DRIVE = Primary Vault

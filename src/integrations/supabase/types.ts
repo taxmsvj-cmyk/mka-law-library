@@ -179,6 +179,54 @@ export type Database = {
         }
         Relationships: []
       }
+      drive_documents: {
+        Row: {
+          content: string | null
+          created_at: string
+          drive_url: string
+          extraction_status: string
+          folder_path: string | null
+          id: string
+          mime_type: string | null
+          modified_time: string | null
+          name: string
+          root_id: string | null
+          root_name: string | null
+          size: number | null
+          synced_at: string | null
+        }
+        Insert: {
+          content?: string | null
+          created_at?: string
+          drive_url?: string
+          extraction_status?: string
+          folder_path?: string | null
+          id: string
+          mime_type?: string | null
+          modified_time?: string | null
+          name: string
+          root_id?: string | null
+          root_name?: string | null
+          size?: number | null
+          synced_at?: string | null
+        }
+        Update: {
+          content?: string | null
+          created_at?: string
+          drive_url?: string
+          extraction_status?: string
+          folder_path?: string | null
+          id?: string
+          mime_type?: string | null
+          modified_time?: string | null
+          name?: string
+          root_id?: string | null
+          root_name?: string | null
+          size?: number | null
+          synced_at?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
